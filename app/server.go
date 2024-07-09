@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"strings"
 
@@ -10,12 +11,18 @@ import (
 	"os"
 )
 
+var filedir string
+
+func init() {
+	flag.StringVar(&filedir, "directory", "", "dir")
+}
+
 func main() {
+	flag.Parse()
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 
-	// Uncomment this block to pass the first stage
-	//
+	fmt.Println(filedir)
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
 		fmt.Println("Failed to bind to port 4221")
@@ -30,7 +37,6 @@ func main() {
 		}
 
 		defer conn.Close()
-
 		go handleConnection(conn)
 	}
 }
@@ -52,6 +58,14 @@ func handleConnection(conn net.Conn) {
 		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
 	case strings.HasPrefix(path, "/user-agent"):
 		response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(req.UserAgent)), req.UserAgent)
+	case strings.HasPrefix(path, "/files"):
+		files := strings.TrimPrefix(path, "/files/")
+		file, err := os.ReadFile(filedir + files)
+		if err != nil {
+			response = generateResponse(404, "Not Found") + "\r\n\r\n"
+			break
+		}
+		response = fmt.Sprintf("%s\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len(file), file)
 	case path == "/":
 		response = generateResponse(200, "OK") + "\r\n\r\n"
 	default:
@@ -59,6 +73,7 @@ func handleConnection(conn net.Conn) {
 	}
 
 	conn.Write([]byte(response))
+	conn.Close()
 
 }
 
