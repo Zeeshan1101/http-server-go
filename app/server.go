@@ -31,31 +31,37 @@ func main() {
 
 		defer conn.Close()
 
-		scanner := bufio.NewScanner(conn)
-
-		req, err := ParseRequest(scanner)
-
-		if err != nil {
-			fmt.Fprintln(conn, "reading input", err)
-		}
-
-		var response string
-
-		switch path := req.Path; {
-		case strings.HasPrefix(path, "/echo"):
-			suffix := strings.TrimPrefix(path, "/echo/")
-			response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
-		case strings.HasPrefix(path, "/user-agent"):
-			response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(req.UserAgent)), req.UserAgent)
-		case path == "/":
-			response = generateResponse(200, "OK") + "\r\n\r\n"
-		default:
-			response = generateResponse(404, "Not Found") + "\r\n\r\n"
-		}
-
-		conn.Write([]byte(response))
+		go handleConnection(conn)
 	}
 }
+
+func handleConnection(conn net.Conn) {
+	scanner := bufio.NewScanner(conn)
+
+	req, err := ParseRequest(scanner)
+
+	if err != nil {
+		fmt.Fprintln(conn, "reading input", err)
+	}
+
+	var response string
+
+	switch path := req.Path; {
+	case strings.HasPrefix(path, "/echo"):
+		suffix := strings.TrimPrefix(path, "/echo/")
+		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
+	case strings.HasPrefix(path, "/user-agent"):
+		response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(req.UserAgent)), req.UserAgent)
+	case path == "/":
+		response = generateResponse(200, "OK") + "\r\n\r\n"
+	default:
+		response = generateResponse(404, "Not Found") + "\r\n\r\n"
+	}
+
+	conn.Write([]byte(response))
+
+}
+
 func generateResponse(statusCode int, statusText string) string {
 	return fmt.Sprintf("HTTP/1.1 %d %s", statusCode, statusText)
 }
