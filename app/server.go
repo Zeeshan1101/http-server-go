@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
-	// Uncomment this block to pass the first stage
 	"net"
 	"os"
 )
@@ -42,9 +43,8 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) {
-	scanner := bufio.NewScanner(conn)
-
-	req, err := ParseRequest(scanner)
+	scanner := bufio.NewReader(conn)
+	req, err := http.ReadRequest(scanner)
 
 	if err != nil {
 		fmt.Fprintln(conn, "reading input", err)
@@ -52,24 +52,48 @@ func handleConnection(conn net.Conn) {
 
 	var response string
 
-	switch path := req.Path; {
-	case strings.HasPrefix(path, "/echo"):
-		suffix := strings.TrimPrefix(path, "/echo/")
-		response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
-	case strings.HasPrefix(path, "/user-agent"):
-		response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(req.UserAgent)), req.UserAgent)
-	case strings.HasPrefix(path, "/files"):
-		files := strings.TrimPrefix(path, "/files/")
-		file, err := os.ReadFile(filedir + files)
-		if err != nil {
+	if req.Method == "GET" {
+		switch path := req.URL.Path; {
+		case strings.HasPrefix(path, "/echo"):
+			suffix := strings.TrimPrefix(path, "/echo/")
+			response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
+		case strings.HasPrefix(path, "/user-agent"):
+			useragent := req.Header.Get("User-Agent")
+			response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(useragent)), useragent)
+		case strings.HasPrefix(path, "/files"):
+			files := strings.TrimPrefix(path, "/files/")
+			file, err := os.ReadFile(filedir + files)
+			if err != nil {
+				response = generateResponse(404, "Not Found") + "\r\n\r\n"
+				break
+			}
+			response = fmt.Sprintf("%s\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len(file), file)
+		case path == "/":
+			response = generateResponse(200, "OK") + "\r\n\r\n"
+		default:
 			response = generateResponse(404, "Not Found") + "\r\n\r\n"
-			break
 		}
-		response = fmt.Sprintf("%s\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len(file), file)
-	case path == "/":
-		response = generateResponse(200, "OK") + "\r\n\r\n"
-	default:
-		response = generateResponse(404, "Not Found") + "\r\n\r\n"
+	}
+
+	if req.Method == "POST" {
+		switch path := req.URL.Path; {
+		case strings.HasPrefix(path, "/files/"):
+			files := strings.TrimPrefix(path, "/files/")
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				response = generateResponse(404, "File Cannot Be Read") + "\r\n\r\n"
+				break
+			}
+			defer req.Body.Close()
+			err = os.WriteFile(filedir+files, []byte(data), 0644)
+			if err != nil {
+				response = generateResponse(404, "File Cannot Be Written") + "\r\n\r\n"
+				break
+			}
+			response = generateResponse(201, "Created") + "\r\n\r\n"
+		default:
+			response = generateResponse(404, "Not Found") + "\r\n\r\n"
+		}
 	}
 
 	conn.Write([]byte(response))
@@ -79,40 +103,4 @@ func handleConnection(conn net.Conn) {
 
 func generateResponse(statusCode int, statusText string) string {
 	return fmt.Sprintf("HTTP/1.1 %d %s", statusCode, statusText)
-}
-
-type HttpRequest struct {
-	Path      string
-	Method    string
-	Headers   map[string]string
-	Body      string
-	UserAgent string
-}
-
-func ParseRequest(scanner *bufio.Scanner) (*HttpRequest, error) {
-	var options HttpRequest = HttpRequest{}
-	options.Headers = make(map[string]string)
-
-	for i := 0; scanner.Scan(); i++ {
-		if i == 0 {
-			parts := strings.Split(scanner.Text(), " ")
-			options.Method = parts[0]
-			options.Path = parts[1]
-			continue
-		}
-		headers := strings.Split(scanner.Text(), ": ")
-
-		if len(headers) < 2 {
-			options.Body = headers[0]
-			break
-		}
-
-		if headers[0] == "User-Agent" {
-			options.UserAgent = headers[1]
-		}
-
-		options.Headers[headers[0]] = headers[1]
-	}
-
-	return &options, nil
 }
