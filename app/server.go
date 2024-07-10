@@ -42,6 +42,26 @@ func main() {
 	}
 }
 
+type Response struct {
+	StatusCode int
+	Status     string
+	Header     map[string][]string
+	Body       string
+}
+
+func AcceptForm(res Response) string {
+	var response string
+	response += fmt.Sprintf("HTTP/1.1 %d %s\r\n", res.StatusCode, res.Status)
+
+	for k, v := range res.Header {
+		response += fmt.Sprintf("%s: %s\r\n", k, v[0])
+	}
+	response += "\r\n"
+	response += string(res.Body)
+
+	return response
+}
+
 func handleConnection(conn net.Conn) {
 	scanner := bufio.NewReader(conn)
 	req, err := http.ReadRequest(scanner)
@@ -50,28 +70,66 @@ func handleConnection(conn net.Conn) {
 		fmt.Fprintln(conn, "reading input", err)
 	}
 
-	var response string
+	var response Response
 
 	if req.Method == "GET" {
 		switch path := req.URL.Path; {
 		case strings.HasPrefix(path, "/echo"):
 			suffix := strings.TrimPrefix(path, "/echo/")
-			response = fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len([]byte(suffix)), suffix)
+			acceptencoding := req.Header.Get("Accept-Encoding")
+			if acceptencoding == "gzip" {
+				response = Response{
+					StatusCode: 200,
+					Status:     "OK",
+					Header: map[string][]string{
+						"Content-Encoding": {"gzip"},
+						"Content-Type":     {"text/plain"},
+						"Content-Length":   {fmt.Sprintf("%d", len([]byte(suffix)))},
+					},
+					Body: suffix,
+				}
+			} else {
+				response = Response{
+					StatusCode: 200,
+					Status:     "OK",
+					Header: map[string][]string{
+						"Content-Type":   {"text/plain"},
+						"Content-Length": {fmt.Sprintf("%d", len([]byte(suffix)))},
+					},
+					Body: suffix,
+				}
+			}
 		case strings.HasPrefix(path, "/user-agent"):
 			useragent := req.Header.Get("User-Agent")
-			response = fmt.Sprintf("%s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len([]byte(useragent)), useragent)
+			response = Response{
+				StatusCode: 200,
+				Status:     "OK",
+				Header: map[string][]string{
+					"Content-Type":   {"text/plain"},
+					"Content-Length": {fmt.Sprintf("%d", len([]byte(useragent)))},
+				},
+				Body: useragent,
+			}
 		case strings.HasPrefix(path, "/files"):
 			files := strings.TrimPrefix(path, "/files/")
 			file, err := os.ReadFile(filedir + files)
 			if err != nil {
-				response = generateResponse(404, "Not Found") + "\r\n\r\n"
+				response = generateResponse(404, "Not Found")
 				break
 			}
-			response = fmt.Sprintf("%s\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s", generateResponse(200, "OK"), len(file), file)
+			response = Response{
+				StatusCode: 200,
+				Status:     "OK",
+				Header: map[string][]string{
+					"Content-Type":   {"application/octet-stream"},
+					"Content-Length": {fmt.Sprintf("%d", len([]byte(file)))},
+				},
+				Body: string(file),
+			}
 		case path == "/":
-			response = generateResponse(200, "OK") + "\r\n\r\n"
+			response = generateResponse(200, "OK")
 		default:
-			response = generateResponse(404, "Not Found") + "\r\n\r\n"
+			response = generateResponse(404, "Not Found")
 		}
 	}
 
@@ -81,26 +139,29 @@ func handleConnection(conn net.Conn) {
 			files := strings.TrimPrefix(path, "/files/")
 			data, err := io.ReadAll(req.Body)
 			if err != nil {
-				response = generateResponse(404, "File Cannot Be Read") + "\r\n\r\n"
+				response = generateResponse(404, "File Cannot Be Read")
 				break
 			}
 			defer req.Body.Close()
 			err = os.WriteFile(filedir+files, []byte(data), 0644)
 			if err != nil {
-				response = generateResponse(404, "File Cannot Be Written") + "\r\n\r\n"
+				response = generateResponse(404, "File Cannot Be Written")
 				break
 			}
-			response = generateResponse(201, "Created") + "\r\n\r\n"
+			response = generateResponse(201, "Created")
 		default:
-			response = generateResponse(404, "Not Found") + "\r\n\r\n"
+			response = generateResponse(404, "Not Found")
 		}
 	}
 
-	conn.Write([]byte(response))
+	conn.Write([]byte(AcceptForm(response)))
 	conn.Close()
 
 }
 
-func generateResponse(statusCode int, statusText string) string {
-	return fmt.Sprintf("HTTP/1.1 %d %s", statusCode, statusText)
+func generateResponse(statusCode int, statusText string) Response {
+	return Response{
+		StatusCode: statusCode,
+		Status:     statusText,
+	}
 }
