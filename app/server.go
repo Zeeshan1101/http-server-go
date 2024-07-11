@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"regexp"
@@ -14,6 +16,37 @@ var filedir string
 
 func init() {
 	flag.StringVar(&filedir, "directory", "", "dir")
+}
+
+// Types
+
+type Method int
+
+const (
+	GET Method = iota + 1
+	POST
+	PUT
+	DELETE
+	NOT
+)
+
+func (m Method) String() string {
+	return [...]string{"GET", "POST", "PUT", "DELETE"}[m-1]
+}
+
+func ReadString(method string) Method {
+	switch method {
+	case "GET":
+		return GET
+	case "POST":
+		return POST
+	case "PUT":
+		return PUT
+	case "DELETE":
+		return DELETE
+	default:
+		return NOT
+	}
 }
 
 type RouteHandler func(req Request, res Response) Response
@@ -50,6 +83,7 @@ func (h Headers) Get(key string) string {
 	return strings.Join(h[key], ",")
 }
 
+// / HttpRouter
 type HttpRouter struct {
 	Host     string
 	Port     string
@@ -119,7 +153,6 @@ func (r *HttpRouter) HandlerIncoming(conn net.Conn) Response {
 			reg := regexp.MustCompile(v.regex)
 			if reg.Match([]byte(req.Path)) {
 				route = v
-				fmt.Println(route)
 				break
 			}
 		}
@@ -151,35 +184,7 @@ func (r *HttpRouter) HandlerIncoming(conn net.Conn) Response {
 
 }
 
-type Method int
-
-const (
-	GET Method = iota + 1
-	POST
-	PUT
-	DELETE
-	NOT
-)
-
-func (m Method) String() string {
-	return [...]string{"GET", "POST", "PUT", "DELETE"}[m-1]
-}
-
-func ReadString(method string) Method {
-	switch method {
-	case "GET":
-		return GET
-	case "POST":
-		return POST
-	case "PUT":
-		return PUT
-	case "DELETE":
-		return DELETE
-	default:
-		return NOT
-	}
-}
-
+// / Request
 type Request struct {
 	Method      Method
 	Path        string
@@ -228,6 +233,7 @@ func ParseRequest(conn net.Conn) Request {
 	return request
 }
 
+// / Response
 type Response struct {
 	StatusCode int
 	Status     string
@@ -247,6 +253,25 @@ func (res *Response) WriteResponse() string {
 	response += string(res.Body)
 
 	return response
+}
+
+// GZIP Compression
+func Compression(body []byte) ([]byte, error) {
+	var compressed bytes.Buffer
+
+	writer := gzip.NewWriter(&compressed)
+
+	_, err := writer.Write(body)
+	if err != nil {
+		return nil, err
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return compressed.Bytes(), nil
 }
 
 func main() {
@@ -272,12 +297,19 @@ func main() {
 		acceptencoding := req.Headers.Get("Accept-Encoding")
 		fmt.Println(acceptencoding)
 		if acceptencoding == "gzip" {
+			compressBody, err := Compression([]byte(suffix))
+			if err != nil {
+				return Response{
+					StatusCode: 500,
+					Status:     "Internal Error",
+				}
+			}
 			res.Headers = map[string][]string{
 				"Content-Encoding": {"gzip"},
 				"Content-Type":     {"text/plain"},
-				"Content-Length":   {fmt.Sprintf("%d", len([]byte(suffix)))},
+				"Content-Length":   {fmt.Sprintf("%d", len([]byte(compressBody)))},
 			}
-			res.Body = suffix
+			res.Body = string(compressBody)
 		} else {
 			res.Headers = map[string][]string{
 				"Content-Type":   {"text/plain"},
